@@ -43,8 +43,8 @@ Uniswap pools work using a simple math rule: **the product of two token amounts 
 
 Imagine a pool with two tokens: ETH and USDC.
 
-- $\large x$ = amount of ETH in the pool ***(e.g., 100 ETH)***
-- $\large y$ = amount of USDC in the pool ***(e.g., 200,000 USDC)***
+- $\large {x}$ = amount of ETH in the pool ***(e.g., 100 ETH)***
+- $\large {y}$ = amount of USDC in the pool ***(e.g., 200,000 USDC)***
 - ${\large k}$ = ${\large x \times y}$ = a constant number ***(100 × 200,000 = 20,000,000)***
 
 **The rule:** No matter what, $\large{x \times y}$ **must** always equal $\large{k}$ ***(20,000,000 in this example)***.
@@ -88,7 +88,7 @@ Notice how buying more gives you a worse price? That's the **constant product fo
 
 #### Trading Fees
 
-In reality, Uniswap charges a **0.3% fee** on every trade. This fee stays in the pool, so ${\large k}$ actually **grows** over time.
+In reality, Uniswap charges a **0.3% fee** on every trade. This fee stays in the pool, so $\large{k}$ actually **grows** over time.
 
 This means:
 
@@ -100,12 +100,16 @@ This means:
 
 #### Visual Analogy
 
+![Seesaw](https://github.com/z0ls3c/uniswap-v2-security-analysis/blob/main/diagrams/visualpool.png)
+
 Think of the pool like a seesaw:
 
 - One side has ETH, the other has USDC
 - When you take ETH off one side, you must add USDC to the other to keep it balanced
 - The "balance point" $\large {k}$ never changes
 - The more you take, the more you must add to keep it balanced
+
+>**NOTE:** Notice that this example uses an extreme trade, pulling 50% of the ETH out of the pool moved the implied price from 1,000 USDC/ETH to 4,000 USDC/ETH (a 4x increase). In a real, deep liquidity pool, individual swaps cause much smaller price movements. But this is exactly the dynamic that flash loan **price manipulation** attacks exploit: temporarily distorting a pool's reserves to move the spot price for downstream consumers ***(oracles, lending protocols)***. We'll return to this in the price-manipulation section.
 
 ---
 ### Liquidity Provision
@@ -120,6 +124,7 @@ When you provide liquidity:
 - Your LP tokens represent your proportional ownership
 
 **Example:**
+
 - Pool has 100 ETH + 200,000 USDC
 - You add 10 ETH + 20,000 USDC ***(10% of the pool)***
 - You receive 10% of total LP token supply
@@ -154,6 +159,7 @@ When you provide liquidity:
 - They're the key to removing liquidity
 
 ---
+
 ### Trading Fees
 #### How the 0.3% Fee Works?
 
@@ -192,9 +198,12 @@ Fees aren't sent anywhere, they **stay in the pool**, which means:
 Uniswap V2 has a mechanism for a 1/6th protocol fee ***(taking 0.05% of the 0.3%)***, but it's currently turned off. If enabled, the protocol would mint LP tokens to a designated address.
 
 ---
+
 ## Contract Deep Dive
 
 ### Architecture
+
+![Uniswap V2 Architecture](./diagrams/architecture.png)
 
 Uniswap V2 consists of three main contracts:
 
@@ -210,10 +219,7 @@ Uniswap V2 consists of three main contracts:
 
 **The liquidity pool** that holds reserves and executes swaps using the constant product formula.
 
-
-![[Uniswap V2 contract flow diagram.png#Right]]
-
-#### Flow Diagram
+#### Process Flow
 
 ```mermaid
 flowchart TB
@@ -257,40 +263,59 @@ or the transaction reverts"]
     classDef noteNode fill:#f9fafb,stroke:#6b7280,stroke-width:1.5px,color:#111827;
 ```
 ---
+
 ### Key Functions
 
 #### `swap()`
 
-```solidity
+```js
 function swap(uint amount0Out, uint amount1Out, address to, bytes calldata data) external lock {
-	require(amount0Out > 0 || amount1Out > 0, 'UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT');  // Check that at least one of the output amounts is greater than 0
-	(uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
-	require(amount0Out < _reserve0 && amount1Out < _reserve1, 'UniswapV2: INSUFFICIENT_LIQUIDITY'); // Check that the output amounts are less than the reserves, ensuring sufficient liquidity for the swap
+    // Validate at least one output amount
+    require(amount0Out > 0 || amount1Out > 0, 'UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT');
+    (uint112 _reserve0, uint112 _reserve1,) = getReserves();
+    
+    // Ensure sufficient liquidity exists
+    require(amount0Out < _reserve0 && amount1Out < _reserve1, 'UniswapV2: INSUFFICIENT_LIQUIDITY');
 
-	// Declare variables to hold the balances of token0 and token1 after the swap and potential callback
-	uint balance0;
-	uint balance1;
-	{ // scope for _token{0,1}, avoids stack too deep errors
-	address _token0 = token0;
-	address _token1 = token1;
-	require(to != _token0 && to != _token1, 'UniswapV2: INVALID_TO'); // Check that the recipient address is not the same as either of the token addresses, preventing potential issues with transferring tokens to the contract itself
-	if (amount0Out > 0) _safeTransfer(_token0, to, amount0Out); // optimistically transfer tokens
-	if (amount1Out > 0) _safeTransfer(_token1, to, amount1Out); // optimistically transfer tokens
-	if (data.length > 0) IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data); // If data is provided, call the uniswapV2Call function on the recipient contract, allowing for flash swap functionality
-	balance0 = IERC20(_token0).balanceOf(address(this)); // Balance 0 after the swap and potential callback
-	balance1 = IERC20(_token1).balanceOf(address(this));  // Balance 1 after the swap and potential callback
-	}
-	uint amount0In = balance0 > _reserve0 - amount0Out ? balance0 - (_reserve0 - amount0Out) : 0; // Calculate the amount of token0 that was input into the contract during the swap, accounting for the output amount
-	uint amount1In = balance1 > _reserve1 - amount1Out ? balance1 - (_reserve1 - amount1Out) : 0; // Calculate the amount of token1 that was input into the contract during the swap, accounting for the output amount
-	require(amount0In > 0 || amount1In > 0, 'UniswapV2: INSUFFICIENT_INPUT_AMOUNT'); // Check that at least one of the input amounts is greater than 0, ensuring that there was some input into the swap
-	{ // scope for reserve{0,1}Adjusted, avoids stack too deep errors
-	uint balance0Adjusted = balance0.mul(1000).sub(amount0In.mul(3)); // Adjust the balance of token0 to account for the 0.3% fee on the input amount, ensuring that the invariant holds after the swap
-	uint balance1Adjusted = balance1.mul(1000).sub(amount1In.mul(3)); // Adjust the balance of token1 to account for the 0.3% fee on the input amount, ensuring that the invariant holds after the swap
-	require(balance0Adjusted.mul(balance1Adjusted) >= uint(_reserve0).mul(_reserve1).mul(1000**2), 'UniswapV2: K'); // Check that the product of the adjusted balances is greater than or equal to the product of the reserves multiplied by 1000^2, ensuring that the constant product invariant holds after accounting for fees
-	}
+    uint balance0;
+    uint balance1;
+    {
+        address _token0 = token0;
+        address _token1 = token1;
+        
+        // Prevent sending tokens to token contracts themselves
+        require(to != _token0 && to != _token1, 'UniswapV2: INVALID_TO');
+        
+        // Optimistically transfer output tokens
+        if (amount0Out > 0) _safeTransfer(_token0, to, amount0Out);
+        if (amount1Out > 0) _safeTransfer(_token1, to, amount1Out);
+        
+        // Flash swap callback if data provided
+        if (data.length > 0) IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data);
+        
+        // Read actual balances after transfers and callback
+        balance0 = IERC20(_token0).balanceOf(address(this));
+        balance1 = IERC20(_token1).balanceOf(address(this));
+    }
+    
+    // Calculate input amounts from balance changes (can't be spoofed)
+    uint amount0In = balance0 > _reserve0 - amount0Out ? balance0 - (_reserve0 - amount0Out) : 0;
+    uint amount1In = balance1 > _reserve1 - amount1Out ? balance1 - (_reserve1 - amount1Out) : 0;
+    
+    // Validate input was provided
+    require(amount0In > 0 || amount1In > 0, 'UniswapV2: INSUFFICIENT_INPUT_AMOUNT');
+    
+    {
+        // Adjust balances to account for 0.3% fee
+        uint balance0Adjusted = balance0.mul(1000).sub(amount0In.mul(3));
+        uint balance1Adjusted = balance1.mul(1000).sub(amount1In.mul(3));
+        
+        // K invariant check: ensures constant product holds after fees
+        require(balance0Adjusted.mul(balance1Adjusted) >= uint(_reserve0).mul(_reserve1).mul(1000**2), 'UniswapV2: K');
+    }
 
-	_update(balance0, balance1, _reserve0, _reserve1); // Update the reserves to reflect the new balances after the swap
-	emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to); // Emit the Swap event with details of the swap, including the sender, input amounts, output amounts, and recipient
+    _update(balance0, balance1, _reserve0, _reserve1);
+    emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
 }
 ```
 
@@ -298,26 +323,26 @@ function swap(uint amount0Out, uint amount1Out, address to, bytes calldata data)
 
 **When it's needed:**
 
-- User wants to trade `token0` for `token1` (_or vice versa_)
-- Flash swaps (_borrow tokens, use them, repay in same transaction_)
-- Arbitrage opportunities
+- User wants to trade `token0` for `token1` ***(or vice versa)***
+- Flash swaps ***(borrow tokens, use them, repay in same transaction)***
+- Arbitrage opportunities ***(profit from price differences between exchanges)***
 
 **How it works:**
 
 1. Validates output amounts are greater than 0 and less than reserves
-2. **Optimistically transfers** output tokens to recipient
-3. If `data` is provided, calls callback on recipient (_enables flash swaps_)
+2. **Optimistically transfers** output tokens to recipient ***(sends before receiving payment)***
+3. If `data` is provided, calls callback on recipient ***(enables flash swaps)***
 4. Reads actual balances to calculate input amounts
 5. Validates input amounts are greater than 0
-6. **Checks K invariant** with 0.3% fee adjustment
+6. **Checks ${\Large k}$ invariant** with 0.3% fee adjustment
 7. Updates reserves to reflect new balances
-8. Emits Swap event
+8. Emits `Swap` event
 
 **Security mechanisms:**
 
-- **Lock modifier:** Prevents reentrancy attacks
+- **`lock` modifier:** Prevents reentrancy attacks
 - **Balance-based input calculation:** Can't spoof amounts - `amountIn = balance - (reserve - amountOut)`
-- **K invariant check:** Ensures `(balance0 * 1000 - amountIn * 3) * (balance1 * 1000 - amountIn * 3) >= reserve0 * reserve1 * 1000²`
+- ${\Large k}$ **invariant check:** Ensures `(balance0 * 1000 - amountIn * 3) * (balance1 * 1000 - amountIn * 3) >= reserve0 * reserve1 * 1000**2`
 - **Fee enforcement:** 0.3% fee automatically deducted via invariant math
 - **`to` address check:** Prevents sending tokens to token contracts themselves
 
@@ -346,37 +371,44 @@ Router calls swap(1 ETH, 0, user, "")
 
 - **Reentrancy:** `lock` modifier stops recursive calls
 - **Bypassing payment:** Balance-based calculation ensures tokens were actually sent
-- **Price manipulation:** $\Large k$ invariant prevents extracting value
+- **Price manipulation:** $\large {k}$ invariant prevents extracting value
 - **Fee evasion:** Math enforces fees automatically
 - **Self-transfer exploits:** `to` address validation
 
-**Key insight:** The optimistic transfer ***(send tokens before receiving payment)*** is **SAFE** because the $\Large k$ invariant check happens after. If payment wasn't received, the invariant check fails and the entire transaction reverts.
+**Key insight:** The optimistic transfer ***(send tokens before receiving payment)*** is **SAFE** because the $\large k$ invariant check happens after. If payment wasn't received, the invariant check fails and the entire transaction reverts.
 
 ---
+
 #### `mint()`
 
-```sol
+```js
 function mint(address to) external lock returns (uint liquidity) {
-	(uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
-	uint balance0 = IERC20(token0).balanceOf(address(this)); // Balance of token0 in the contract, used to calculate the amount of token0 that was added during this minting operation
-	uint balance1 = IERC20(token1).balanceOf(address(this)); // Balance of token1 in the contract, used to calculate the amount of token1 that was added during this minting operation
-	uint amount0 = balance0.sub(_reserve0); // Calculate the amount of token0 that was added to the contract during this minting operation by subtracting the previous reserve from the current balance
-	uint amount1 = balance1.sub(_reserve1); // Calculate the amount of token1 that was added to the contract during this minting operation by subtracting the previous reserve from the current balance
+    (uint112 _reserve0, uint112 _reserve1,) = getReserves();
+    
+    // Calculate amounts added from balance changes
+    uint balance0 = IERC20(token0).balanceOf(address(this));
+    uint balance1 = IERC20(token1).balanceOf(address(this));
+    uint amount0 = balance0.sub(_reserve0);
+    uint amount1 = balance1.sub(_reserve1);
 
-	bool feeOn = _mintFee(_reserve0, _reserve1); // Check if the fee is on and mint any necessary liquidity tokens to the fee recipient before calculating the liquidity to mint for the provider
-	uint _totalSupply = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
-	if (_totalSupply == 0) {
-		liquidity = Math.sqrt(amount0.mul(amount1)).sub(MINIMUM_LIQUIDITY); // Calculate the initial liquidity to mint for the first provider using the geometric mean of the amounts of token0 and token1 added, and subtracting the minimum liquidity to be locked
-	   _mint(address(0), MINIMUM_LIQUIDITY); // permanently lock the first MINIMUM_LIQUIDITY tokens
-	} else {
-		liquidity = Math.min(amount0.mul(_totalSupply) / _reserve0, amount1.mul(_totalSupply) / _reserve1); // Calculate the liquidity to mint for subsequent providers based on the ratio of the amounts of token0 and token1 added to the existing reserves, ensuring that the provider receives liquidity tokens proportional to their contribution to the pool
-	}
-	require(liquidity > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED'); // Check that the calculated liquidity to mint is greater than 0, ensuring that the provider receives some liquidity tokens for their contribution
-	_mint(to, liquidity); // Mint the calculated amount of liquidity tokens to the provider's address
+    bool feeOn = _mintFee(_reserve0, _reserve1);
+    uint _totalSupply = totalSupply;
+    
+    if (_totalSupply == 0) {
+        // First LP: use geometric mean minus minimum liquidity
+        liquidity = Math.sqrt(amount0.mul(amount1)).sub(MINIMUM_LIQUIDITY);
+        _mint(address(0), MINIMUM_LIQUIDITY); // Permanently lock first MINIMUM_LIQUIDITY tokens
+    } else {
+        // Subsequent LPs: proportional to pool ratio (use minimum to prevent single-sided exploits)
+        liquidity = Math.min(amount0.mul(_totalSupply) / _reserve0, amount1.mul(_totalSupply) / _reserve1);
+    }
+    
+    require(liquidity > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED');
+    _mint(to, liquidity);
 
-	_update(balance0, balance1, _reserve0, _reserve1); // Update the reserves to reflect the new balances after the minting operation
-	if (feeOn) kLast = uint(reserve0).mul(reserve1); // reserve0 and reserve1 are up-to-date
-	emit Mint(msg.sender, amount0, amount1); // Emit the Mint event with details of the minting operation, including the sender and the amounts of token0 and token1 added to the pool
+    _update(balance0, balance1, _reserve0, _reserve1);
+    if (feeOn) kLast = uint(reserve0).mul(reserve1);
+    emit Mint(msg.sender, amount0, amount1);
 }
 ```
 
@@ -390,7 +422,7 @@ function mint(address to) external lock returns (uint liquidity) {
 
 **How it works:**
 
-1. Reads current balances and calculates amounts added (_balance - reserve_)
+1. Reads current balances and calculates amounts added ***(balance - reserve)***
 2. Calls `_mintFee()` to handle protocol fees if enabled
 3. **For first LP:** `liquidity = sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY`
     - Burns 1000 wei LP tokens to address(0) permanently
@@ -400,11 +432,11 @@ function mint(address to) external lock returns (uint liquidity) {
 6. Mints LP tokens to recipient
 7. Updates reserves to new balances
 8. Updates `kLast` if fees enabled
-9. Emits Mint event
+9. Emits `Mint` event
 
 **Security mechanisms:**
 
-- **Lock modifier:** Prevents reentrancy
+- **`lock` modifier:** Prevents reentrancy
 - **Balance-based calculation:** Can't fake deposit amounts
 - **`MINIMUM_LIQUIDITY` burn:** Prevents donation attack on first mint
 - **`min()` formula:** Prevents getting LP tokens for single-sided deposits
@@ -413,7 +445,7 @@ function mint(address to) external lock returns (uint liquidity) {
 
 **Example:**
 
-```sol
+```js
 // First LP (pool is empty):
 User sends: 100 ETH + 200,000 USDC
 liquidity = sqrt(100 * 200,000) - 1000 = sqrt(20,000,000) - 1000
@@ -436,40 +468,48 @@ liquidity = 447 LP tokens
 
 - **Donation attack:** `MINIMUM_LIQUIDITY` makes initial donation uneconomical
     - Without it: Attacker adds 1 wei, donates 1000 ETH, next LP gets unfair ratio
-    - With it: First LP must provide meaningful liquidity (_>1000 wei worth_)
+    - With it: First LP must provide meaningful liquidity ***(>1000 wei worth)***
 - **Single-sided liquidity:** `min()` ensures you get LP for the SMALLER ratio
     - Try to add 100 ETH + 1 USDC → Only get LP for 1 USDC worth
 - **Balance spoofing:** Actual balances used, can't lie about amounts
 - **Precision loss:** Multiplication before division
 
-**Key insight:** The geometric mean (`sqrt(amount0 * amount1)`) for initial LP is brilliant because it's unit-independent. Whether pool is ETH/USDC or ETH/DAI, the initial LP formula treats both tokens fairly based on the chosen ratio.
+**Key insight:** The geometric mean **(`sqrt(amount0 * amount1)`)** for initial LP is brilliant because it's unit-independent. Whether pool is ETH/USDC or ETH/DAI, the initial LP formula treats both tokens fairly based on the chosen ratio.
 
 ---
 #### `burn()`
 
-```sol
+```js
 function burn(address to) external lock returns (uint amount0, uint amount1) {
-	(uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
-	address _token0 = token0;                                // gas savings
-	address _token1 = token1;                                // gas savings
-	uint balance0 = IERC20(_token0).balanceOf(address(this)); // Balance of token0 in the contract, used to calculate the amount of token0 that will be returned to the provider during this burning operation
-	uint balance1 = IERC20(_token1).balanceOf(address(this)); // Balance of token1 in the contract, used to calculate the amount of token1 that will be returned to the provider during this burning operation
-	uint liquidity = balanceOf[address(this)]; // Amount of liquidity tokens that the contract itself holds, which represents the liquidity that will be burned and returned to the provider during this burning operation
+    (uint112 _reserve0, uint112 _reserve1,) = getReserves();
+    address _token0 = token0;
+    address _token1 = token1;
+    uint balance0 = IERC20(_token0).balanceOf(address(this));
+    uint balance1 = IERC20(_token1).balanceOf(address(this));
+    
+    // LP tokens to burn (must be sent to pair first)
+    uint liquidity = balanceOf[address(this)];
 
-	bool feeOn = _mintFee(_reserve0, _reserve1); // True or false depending on whether the fee is on, and mint any necessary liquidity tokens to the fee recipient before calculating the amounts of token0 and token1 to return to the provider
-	uint _totalSupply = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
-	amount0 = liquidity.mul(balance0) / _totalSupply; // using balances ensures pro-rata distribution
-	amount1 = liquidity.mul(balance1) / _totalSupply; // using balances ensures pro-rata distribution
-	require(amount0 > 0 && amount1 > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_BURNED'); // Check that the calculated amounts of token0 and token1 to return to the provider are both greater than 0, ensuring that the provider receives some tokens for burning their liquidity
-	_burn(address(this), liquidity); // Burn the liquidity tokens from the contract's balance, which represents the liquidity being removed from the pool by the provider
-	_safeTransfer(_token0, to, amount0); // Token0 is transferred to the provider's address, returning the amount of token0 that corresponds to the burned liquidity
-	_safeTransfer(_token1, to, amount1); // Token1 is transferred to the provider's address, returning the amount of token1 that corresponds to the burned liquidity
-	balance0 = IERC20(_token0).balanceOf(address(this)); // Balance of token0 in the contract after the transfers, used to update the reserves to reflect the new balances after the burning operation
-	balance1 = IERC20(_token1).balanceOf(address(this)); // Balance of token1 in the contract after the transfers, used to update the reserves to reflect the new balances after the burning operation
+    bool feeOn = _mintFee(_reserve0, _reserve1);
+    uint _totalSupply = totalSupply;
+    
+    // Calculate proportional amounts to return
+    amount0 = liquidity.mul(balance0) / _totalSupply;
+    amount1 = liquidity.mul(balance1) / _totalSupply;
+    require(amount0 > 0 && amount1 > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_BURNED');
+    
+    // Burn LP tokens before transferring (prevents reentrancy)
+    _burn(address(this), liquidity);
+    _safeTransfer(_token0, to, amount0);
+    _safeTransfer(_token1, to, amount1);
+    
+    // Re-check balances after transfers (handles fee-on-transfer tokens)
+    balance0 = IERC20(_token0).balanceOf(address(this));
+    balance1 = IERC20(_token1).balanceOf(address(this));
 
-	_update(balance0, balance1, _reserve0, _reserve1); // Update the reserves to reflect the new balances after the burning operation
-	if (feeOn) kLast = uint(reserve0).mul(reserve1); // reserve0 and reserve1 are up-to-date
-	emit Burn(msg.sender, amount0, amount1, to); // Emit the Burn event with details of the burning operation, including the sender, the amounts of token0 and token1 returned to the provider, and the recipient address
+    _update(balance0, balance1, _reserve0, _reserve1);
+    if (feeOn) kLast = uint(reserve0).mul(reserve1);
+    emit Burn(msg.sender, amount0, amount1, to);
 }
 ```
 
@@ -483,29 +523,29 @@ function burn(address to) external lock returns (uint amount0, uint amount1) {
 
 **How it works:**
 
-1. Reads current balances and LP token amount in contract (`balanceOf[address(this)]`)
+1. Reads current balances and LP token amount in contract **(`balanceOf[address(this)]`)**
 2. Calls `_mintFee()` to handle protocol fees if enabled
 3. Calculates amounts to return: `amount = liquidity * balance / totalSupply`
-4. Validates both amounts > 0
+4. Validates both amounts greater than 0
 5. **Burns LP tokens** from contract's balance
-6. Transfers token0 and token1 to recipient
-7. Re-reads balances after transfers (handles fee-on-transfer tokens)
+6. Transfers `token0` and `token1` to recipient
+7. Re-reads balances after transfers ***(handles [fee-on-transfer](https://github.com/d-xo/weird-erc20#fee-on-transfer) tokens)***
 8. Updates reserves to new balances
 9. Updates `kLast` if fees enabled
-10. Emits Burn event
+10. Emits `Burn` event
 
 **Security mechanisms:**
 
-- **Lock modifier:** Prevents reentrancy
+- **`lock` modifier:** Prevents reentrancy
 - **Uses LP tokens already in contract:** Can't burn more than you sent
 - **Pro-rata calculation:** Fair distribution based on ownership
 - **Burn before transfer:** Prevents double-withdrawal via reentrancy
-- **Balance re-check:** Handles weird token behavior (transfer fees)
+- **Balance re-check:** Handles weird token behavior ***(transfer fees)***
 - **Division after multiplication:** Preserves precision
 
 **Example:**
 
-```sol
+```js
 // Pool state:
 reserves: 100 ETH + 200,000 USDC
 totalSupply: 4,471 LP tokens
@@ -532,22 +572,24 @@ User owns: 447 LP tokens (~10%)
 - **Getting more than your share:** Math is exact and proportional
 - **Weird token exploits:** Balance re-check after transfer handles fee-on-transfer tokens
 
-**Key insight:** Using `balanceOf[address(this)]` (_LP tokens the pair holds_) instead of taking `liquidity` as a parameter prevents spoofing. You must actually **SEND** LP tokens to the pair before calling burn. The Router handles this in two steps: transfer LP, then call burn.
+**Key insight:** Using `balanceOf[address(this)]` ***(LP tokens the pair holds)*** instead of taking `liquidity` as a parameter prevents spoofing. You must actually **SEND** LP tokens to the pair before calling burn. The Router handles this in two steps: transfer LP, then call burn.
 
 ---
 
 #### `skim()`
 
-```sol
+```js
 function skim(address to) external lock {
-	address _token0 = token0; // gas savings
-	address _token1 = token1; // gas savings
-	_safeTransfer(_token0, to, IERC20(_token0).balanceOf(address(this)).sub(reserve0)); // Transfer any excess token0 balance in the contract to the specified address, ensuring that the contract's balance of token0 matches the reserve
-	_safeTransfer(_token1, to, IERC20(_token1).balanceOf(address(this)).sub(reserve1)); // Transfer any excess token1 balance in the contract to the specified address, ensuring that the contract's balance of token1 matches the reserve
+    address _token0 = token0;
+    address _token1 = token1;
+    
+    // Transfer excess tokens (balance - reserve) to specified address
+    _safeTransfer(_token0, to, IERC20(_token0).balanceOf(address(this)).sub(reserve0));
+    _safeTransfer(_token1, to, IERC20(_token1).balanceOf(address(this)).sub(reserve1));
 }
 ```
 
-**Purpose:** Remove excess tokens (_balance > reserves_) from the pair contract.
+**Purpose:** Remove excess tokens ***(balance > reserves)*** from the pair contract.
 
 **When it's needed:**
 
@@ -558,20 +600,20 @@ function skim(address to) external lock {
 **How it works:**
 
 1. Reads current balances of both tokens
-2. Calculates excess: `balance - reserve` for each token
+2. Calculates excess: ***(balance - reserve)*** for each token
 3. Transfers excess to specified address
 4. Balances now match reserves exactly
 
 **Security mechanisms:**
 
 - **Lock modifier:** Prevents reentrancy
-- **Anyone can call:** Permissionless cleanup (_MEV bots typically call this_)
+- **Anyone can call:** Permissionless cleanup ***(MEV bots typically call this)***
 - **Can only transfer excess:** Cannot drain reserves themselves
 - **Prevents donation manipulation:** Excess removed before affecting pricing
 
 **Example:**
 
-```solidity
+```js
 // Normal state:
 reserve0: 100 ETH
 balance0: 100 ETH (matches)
@@ -609,9 +651,10 @@ Use `skim()` when you want to **REMOVE** excess. Use `sync()` when you want to *
 
 #### `sync()`
 
-```sol
+```js
 function sync() external lock {
-	_update(IERC20(token0).balanceOf(address(this)), IERC20(token1).balanceOf(address(this)), reserve0, reserve1);
+    // Update reserves to match current balances
+    _update(IERC20(token0).balanceOf(address(this)), IERC20(token1).balanceOf(address(this)), reserve0, reserve1);
 }
 ```
 
@@ -619,9 +662,9 @@ function sync() external lock {
 
 **When it's needed:**
 
-- After rebasing token balance changes automatically
-- After fee-on-transfer token transfer
-- When balance ≠ reserve due to token behavior (not donations)
+- After [rebasing token](https://github.com/d-xo/weird-erc20#balance-modifications-outside-of-transfers-rebasingairdrops) balance changes automatically
+- After [fee-on-transfer](https://github.com/d-xo/weird-erc20#fee-on-transfer) token transfer
+- When balance ≠ reserve due to token behavior ***(not donations)***
 - To ensure reserves accurately reflect pool state
 
 **How it works:**
@@ -634,13 +677,13 @@ function sync() external lock {
 **Security mechanisms:**
 
 - **Lock modifier:** Prevents reentrancy
-- **Anyone can call:** Permissionless (_anyone can trigger sync when needed_)
-- **Ensures accurate reserves:** Critical for weird token types
+- **Anyone can call:** Permissionless ***(anyone can trigger sync when needed)***
+- **Ensures accurate reserves:** Critical for [weird token](https://github.com/d-xo/weird-erc20) types
 - **Fair distribution:** Balance increases benefit all LPs proportionally
 
 **Example:**
 
-```solidity
+```js
 // Rebasing token increased balance:
 reserve0: 100 stETH
 balance0: 105 stETH (5% positive rebase occurred)
@@ -662,18 +705,18 @@ Extra 5 stETH distributed fairly to ALL LPs
 
 **Attack vectors prevented:**
 
-- **First-mover advantage:** Without sync, first person to interact after rebase captures all gains
+- **First-mover advantage:** Without `sync`, first person to interact after rebase captures all gains
 - **Reserve de-sync:** Keeps reserves accurate for fee-on-transfer tokens
 - **Oracle manipulation:** Accurate reserves mean accurate pricing
 
-**Key difference from skim():**
+**Key difference from `skim()`:**
 
-- **`skim()`:** Removes excess (balance - reserve) and sends to address
-- **`sync()`:** Updates reserve to equal balance (_keeps excess in pool_)
+- **`skim()`:** Removes excess ***(balance - reserve)*** and sends to address
+- **`sync()`:** Updates reserve to equal balance ***(keeps excess in pool)***
 
 **When to use which:**
 
 - Use `skim()` when someone **donated** ***(you want to remove excess)***
 - Use `sync()` when token **rebased** or has **transfer fees** ***(you want to acknowledge new balance)***
 
-**Key insight:** For standard ERC20 tokens, you'd never need `sync()` because balances only change through `mint`/`swap`/`burn` ***(which update reserves automatically)***. But for [**weird tokens**](https://github.com/d-xo/weird-erc20) ***(rebasing, fee-on-transfer, deflationary)***, `sync()` is critical to maintain accurate reserves.
+**Key insight:** For standard ERC20 tokens, you'd never need `sync()` because balances only change through `mint`/`swap`/`burn` ***(which update reserves automatically)***. But for **weird tokens** ***(rebasing, fee-on-transfer, deflationary)***, `sync()` is critical to maintain accurate reserves.
