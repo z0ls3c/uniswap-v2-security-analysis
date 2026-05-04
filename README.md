@@ -1,4 +1,45 @@
-# Uniswap V2 Complete Guide
+# Uniswap V2 Security Analysis
+
+A comprehensive deep-dive into Uniswap V2's AMM security patterns through line-by-line code analysis.
+
+**Author:** z0L  
+**Date:** May 3, 2026  
+**Status:** Complete  
+
+---
+
+## Table of Contents
+
+- [What is Uniswap?](#what-is-uniswap)
+    - [How Users Interact with Uniswap?](#how-users-interact-with-uniswap)
+- [Core Concepts](#core-concepts)
+    - [The Constant Product Formula](#the-constant-product-formula-largex-times-y--k)
+        - [The Basic Idea](#the-basic-idea)
+        - [How Swaps Work?](#how-swaps-work)
+        - [Why This Works?](#why-this-works)
+        - [The Price Impact](#the-price-impact)
+        - [Trading Fees](#trading-fees-1)
+        - [Visual Analogy](#visual-analogy)
+- [Liquidity Provision](#liquidity-provision)
+    - [What are LP Tokens?](#what-are-lp-tokens)
+    - [How Shares are Calculated?](#how-shares-are-calculated)
+    - [Why LP Tokens Matter?](#why-lp-tokens-matter)
+- [Trading Fees](#trading-fees)
+    - [How the 0.3% Fee Works?](#how-the-03-fee-works)
+    - [Where Fees Go?](#where-fees-go)
+    - [Fee Distribution](#fee-distribution)
+    - [Protocol Fees (Extra Info)](#protocol-fees-extra-info)
+- [Contract Deep Dive](#contract-deep-dive)
+    - [Architecture](#architecture)
+    - [Process Flow](#process-flow)
+- [Key Functions](#key-functions)
+  - [`swap()`](#swap)
+  - [`mint()`](#mint)
+  - [`burn()`](#burn)
+  - [`skim()`](#skim)
+  - [`sync()`](#sync)
+
+---
 
 ## What is Uniswap?
 
@@ -11,7 +52,7 @@ Uniswap is a decentralized exchange ***(DEX)*** that lets you swap tokens withou
 - **Non-upgradable:** The contracts are permanent and can't be changed
 - **Self-custody:** You always control your tokens
 
-### How Users Interact with Uniswap
+### How Users Interact with Uniswap?
 
 **Swapping tokens:**
 
@@ -112,6 +153,7 @@ Think of the pool like a seesaw:
 >**NOTE:** Notice that this example uses an extreme trade, pulling 50% of the ETH out of the pool moved the implied price from 1,000 USDC/ETH to 4,000 USDC/ETH (a 4x increase). In a real, deep liquidity pool, individual swaps cause much smaller price movements. But this is exactly the dynamic that flash loan **price manipulation** attacks exploit: temporarily distorting a pool's reserves to move the spot price for downstream consumers ***(oracles, lending protocols)***. We'll return to this in the price-manipulation section.
 
 ---
+
 ### Liquidity Provision
 
 #### What are LP Tokens?
@@ -130,7 +172,7 @@ When you provide liquidity:
 - You receive 10% of total LP token supply
 - When you burn LP tokens later, you get back 10% of whatever is in the pool
 
-#### How Shares are Calculated
+#### How Shares are Calculated?
 
 **First Liquidity Provider (Empty Pool):**
 
@@ -161,6 +203,7 @@ When you provide liquidity:
 ---
 
 ### Trading Fees
+
 #### How the 0.3% Fee Works?
 
 Every swap charges a 0.3% fee on the input amount.
