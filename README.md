@@ -38,7 +38,9 @@ A comprehensive deep-dive into Uniswap V2's AMM security patterns through line-b
         - [`burn()`](#burn)
         - [`skim()`](#skim)
         - [`sync()`](#sync)
-
+- [Handling Non-Standard ERC20s](#handling-non-standard-erc20s)
+    - [Supported Weird Behaviors](#supported-weird-behaviors)
+    - [Unsupported Dangerous Behaviors](#unsupporteddangerous-behaviors)
 ---
 
 ## What is Uniswap?
@@ -763,3 +765,33 @@ Extra 5 stETH distributed fairly to ALL LPs
 - Use `sync()` when token **rebased** or has **transfer fees** ***(you want to acknowledge new balance)***
 
 **Key insight:** For standard ERC20 tokens, you'd never need `sync()` because balances only change through `mint`/`swap`/`burn` ***(which update reserves automatically)***. But for **weird tokens** ***(rebasing, fee-on-transfer, deflationary)***, `sync()` is critical to maintain accurate reserves.
+
+---
+
+## Handling Non-Standard ERC20s
+
+Uniswap V2 is designed to work with standard ERC20 tokens, but also handles certain edge cases:
+
+### Supported Weird Behaviors
+
+**Fee-on-Transfer Tokens:**
+- `burn()` re-checks balances after transfers
+- `sync()` can update reserves to match actual balances
+- Example: Tokens that take a % fee on every transfer
+
+**Rebasing Tokens:**
+- `sync()` updates reserves when balances change automatically
+- Ensures reserves reflect current pool state
+- Example: Tokens whose balances change based on external factors
+
+### Unsupported/Dangerous Behaviors
+
+**Not compatible with:**
+- [Tokens with blocklists](https://github.com/d-xo/weird-erc20#tokens-with-blocklists) ***(can DoS the pair)***
+- [Tokens that revert on zero value transfers](https://github.com/d-xo/weird-erc20#revert-on-zero-value-transfers)
+- [Tokens with hooks](https://github.com/d-xo/weird-erc20#tokens-with-hooks) ***(reentrancy vectors)***
+- [Upgradeable tokens](https://github.com/d-xo/weird-erc20#upgradable-tokens) ***(logic can change after pair creation)***
+
+**Security note:** When auditing AMM forks, always check how they handle non-standard tokens. Many exploits happen when weird token behavior interacts unexpectedly with pool logic.
+
+**Reference:** [weird-erc20 repository](https://github.com/d-xo/weird-erc20) - Comprehensive collection of non-standard ERC20 behaviors
