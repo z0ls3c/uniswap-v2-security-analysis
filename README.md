@@ -80,7 +80,7 @@ Uniswap is a decentralized exchange ***(DEX)*** that lets you swap tokens withou
 3. Your share includes earned fees ***(if any)***
 
 ---
-
+>>>>>>>
 ## Core Concepts
 
 ### The Constant Product Formula $\large{(x \times y = k)}$
@@ -529,7 +529,7 @@ liquidity = 447 LP tokens
 **Key insight:** The geometric mean **(`sqrt(amount0 * amount1)`)** for initial LP is brilliant because it's unit-independent. Whether pool is ETH/USDC or ETH/DAI, the initial LP formula treats both tokens fairly based on the chosen ratio.
 
 ---
-
+>>>>>>>
 #### `burn()`
 
 ```js
